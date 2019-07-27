@@ -34,7 +34,6 @@ load(
 )
 load(
     "//third_party/mkl:build_defs.bzl",
-    "if_mkl",
     "if_mkl_ml",
     "mkl_deps",
 )
@@ -199,6 +198,8 @@ tf_cc_test(
 tf_kernel_library(
     name = "collective_ops",
     srcs = if_nccl([
+        "collective_nccl.h",
+        "collective_nccl.cc",
         "collective_nccl_reducer.h",
         "collective_nccl_reducer.cc",
     ]),
@@ -1097,7 +1098,9 @@ tf_kernel_library(
 tf_kernel_library(
     name = "identity_n_op",
     prefix = "identity_n_op",
-    deps = ARRAY_DEPS,
+    deps = ARRAY_DEPS + [
+        "//tensorflow/core:core_cpu_internal",
+    ],
 )
 
 tf_kernel_library(
@@ -4348,6 +4351,7 @@ tf_kernel_library(
     prefix = "fused_batch_norm_op",
     deps = NN_DEPS + [
         ":fill_functor",
+        ":redux_functor",
     ] + if_cuda([
         "//tensorflow/core:stream_executor",
     ]),
@@ -5315,6 +5319,7 @@ cc_library(
         ":string_join_op",
         ":string_length_op",
         ":string_lower_op",
+        ":string_ngrams_op",
         ":string_split_op",
         ":string_strip_op",
         ":string_to_hash_bucket_op",
@@ -5446,6 +5451,30 @@ tf_cc_test(
         ":ops_util",
         ":string_split_op",
         "//tensorflow/core:core_cpu",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+        "//tensorflow/core:testlib",
+    ],
+)
+
+tf_kernel_library(
+    name = "string_ngrams_op",
+    srcs = ["string_ngrams_op.cc"],
+    deps = STRING_DEPS + [
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+tf_cc_test(
+    name = "string_ngrams_op_test",
+    srcs = ["string_ngrams_op_test.cc"],
+    deps = [
+        ":ops_testutil",
+        ":ops_util",
+        ":string_ngrams_op",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
@@ -6148,6 +6177,8 @@ filegroup(
         "resize_nearest_neighbor_op.h",
         "reverse_op.h",
         "save_restore_tensor.h",
+        "scatter_nd_op.h",
+        "scatter_nd_op_cpu_impl.h",
         "segment_reduction_ops.h",
         "softplus_op.h",
         "softsign_op.h",
@@ -6336,6 +6367,15 @@ filegroup(
         "save_op.cc",
         "save_restore_tensor.cc",
         "save_restore_v2_ops.cc",
+        "scatter_nd_op.cc",
+        "scatter_nd_op_cpu_impl_0.cc",
+        "scatter_nd_op_cpu_impl_1.cc",
+        "scatter_nd_op_cpu_impl_2.cc",
+        "scatter_nd_op_cpu_impl_3.cc",
+        "scatter_nd_op_cpu_impl_4.cc",
+        "scatter_nd_op_cpu_impl_5.cc",
+        "scatter_nd_op_cpu_impl_6.cc",
+        "scatter_nd_op_cpu_impl_7.cc",
         "segment_reduction_ops.cc",
         "session_ops.cc",
         "softplus_op.cc",
@@ -7451,8 +7491,10 @@ tf_mkl_kernel_library(
     ],
     deps = [
         ":bounds_check",
+        ":fill_functor",
         ":matmul_op",
         ":ops_util",
+        "//third_party/eigen3",
         "//tensorflow/core:core_cpu",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",

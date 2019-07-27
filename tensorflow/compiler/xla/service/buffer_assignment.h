@@ -25,7 +25,6 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/types/span.h"
-#include "tensorflow/compiler/xla/service/buffer_liveness.h"
 #include "tensorflow/compiler/xla/service/heap_simulator.h"
 #include "tensorflow/compiler/xla/service/hlo.pb.h"
 #include "tensorflow/compiler/xla/service/hlo_alias_analysis.h"
@@ -34,6 +33,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
 #include "tensorflow/compiler/xla/service/logical_buffer.h"
+#include "tensorflow/compiler/xla/service/memory_space_assignment.h"
 #include "tensorflow/compiler/xla/service/tuple_points_to_analysis.h"
 #include "tensorflow/compiler/xla/statusor.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -440,11 +440,6 @@ class BufferAssignment {
   bool HaveDisjointSlices(const HloInstruction* hlo_a,
                           const HloInstruction* hlo_b) const;
 
-  // Returns the underlying points-to analysis used for this assignment.
-  const TuplePointsToAnalysis& points_to_analysis() const {
-    return liveness_->points_to_analysis();
-  }
-
   const HloDataflowAnalysis& dataflow_analysis() const {
     return alias_analysis_->dataflow_analysis();
   }
@@ -452,7 +447,7 @@ class BufferAssignment {
   HloAliasAnalysis& alias_analysis() const { return *alias_analysis_; }
 
   // Returns the BufferLiveness object used to construct this assignment.
-  const BufferLiveness& liveness() const { return *liveness_; }
+  const HloOrdering& hlo_ordering() const { return *hlo_ordering_; }
 
   string ToString() const;
   BufferAssignmentProto ToProto() const;
@@ -483,12 +478,12 @@ class BufferAssignment {
   friend class BufferAssigner;
 
   BufferAssignment(const HloModule* module,
-                   std::unique_ptr<BufferLiveness> liveness,
+                   std::unique_ptr<HloOrdering> hlo_ordering,
                    BufferValue::SizeFunction buffer_size,
                    LogicalBuffer::AlignmentFunction color_alignment,
                    std::unique_ptr<HloAliasAnalysis> alias_analysis)
       : module_(module),
-        liveness_(std::move(liveness)),
+        hlo_ordering_(std::move(hlo_ordering)),
         buffer_size_(std::move(buffer_size)),
         color_alignment_(std::move(color_alignment)),
         alias_analysis_(std::move(alias_analysis)) {}
@@ -540,7 +535,8 @@ class BufferAssignment {
       allocation_index_for_value_;
 
   const HloModule* module_;
-  const std::unique_ptr<BufferLiveness> liveness_;
+
+  const std::unique_ptr<HloOrdering> hlo_ordering_;
 
   // Function which returns the buffer size for a given logical buffer (shape).
   BufferValue::SizeFunction buffer_size_;
@@ -563,7 +559,13 @@ class BufferAssigner {
   static Colorer DefaultColorer() {
     return [](HloAliasAnalysis* alias_analysis, const HloOrdering&) {
       for (HloValue* value : alias_analysis->dataflow_analysis().values()) {
-        value->set_color(BufferValue::Color(0));
+        HloInstruction* defining_instruction = value->defining_instruction();
+        if (defining_instruction->shape().has_layout()) {
+          value->set_color(BufferValue::Color(
+              defining_instruction->shape().layout().memory_space()));
+        } else {
+          value->set_color(BufferValue::Color(0));
+        }
       }
       return Status::OK();
     };
@@ -574,7 +576,9 @@ class BufferAssigner {
   // Build and return a BufferAssignment for the given module. The given
   // HloOrdering is used to determine buffer liveness. buffer_size and
   // color_alignment are functions which returns the size and alignment of a
-  // LogicalBuffer.
+  // LogicalBuffer. If preset_assignments is provided, those pre-set assignment
+  // offsets will be used. The caller guarantees that those assignments are
+  // valid and they do not overwrite each other.
   static StatusOr<std::unique_ptr<BufferAssignment>> Run(
       const HloModule* module, std::unique_ptr<HloOrdering> hlo_ordering,
       BufferValue::SizeFunction buffer_size,
@@ -582,14 +586,17 @@ class BufferAssigner {
       bool allocate_buffers_for_constants = false,
       Colorer colorer = DefaultColorer(),
       const absl::flat_hash_set<HloOpcode>& must_not_live_out = {},
-      HloDataflowAnalysis::CanShareBuffer can_share_buffer = nullptr);
+      HloDataflowAnalysis::CanShareBuffer can_share_buffer = nullptr,
+      std::unique_ptr<PresetAssignments> preset_assignments = {});
 
  private:
   BufferAssigner(bool allocate_buffers_for_constants, Colorer colorer,
-                 const absl::flat_hash_set<HloOpcode>& must_not_live_out)
+                 const absl::flat_hash_set<HloOpcode>& must_not_live_out,
+                 std::unique_ptr<PresetAssignments> preset_assignments)
       : allocate_buffers_for_constants_(allocate_buffers_for_constants),
         colorer_(colorer),
-        must_not_live_out_(must_not_live_out) {}
+        must_not_live_out_(must_not_live_out),
+        preset_assignments_(std::move(preset_assignments)) {}
   virtual ~BufferAssigner() = default;
 
   // Create a buffer assignment.
@@ -609,6 +616,12 @@ class BufferAssigner {
       absl::flat_hash_map<const HloComputation*,
                           absl::flat_hash_set<const HloValue*>>*
           buffers_to_assign_sequentially,
+      BufferAssignment* assignment);
+
+  // Assigns pre-set assignments, if provided. These assignments will be added
+  // to assigned_buffers and skip buffer allocation.
+  Status AssignPresetBuffers(
+      absl::flat_hash_set<const HloBuffer*>* assigned_buffers,
       BufferAssignment* assignment);
 
   // Promotes operations (DUS, scatter) to be done in place: If an operation can
@@ -661,6 +674,9 @@ class BufferAssigner {
 
   // A set of hlo opcodes that can't live out of a computation.
   absl::flat_hash_set<HloOpcode> must_not_live_out_;
+
+  // Description of any buffer offsets that are already set by an earlier pass.
+  std::unique_ptr<PresetAssignments> preset_assignments_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(BufferAssigner);
 };
