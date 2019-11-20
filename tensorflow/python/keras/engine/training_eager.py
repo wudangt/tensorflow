@@ -19,8 +19,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import collections
-
 import numpy as np
 
 from tensorflow.python.eager.backprop import GradientTape
@@ -59,6 +57,14 @@ def _eager_metrics_fn(model, outputs, targets, sample_weights=None, masks=None):
   # Invoke all(weighted and unweighted) metrics.
   metric_results = []
   if targets:
+    # Insert None values corresponding to the targets that need to be skipped
+    # on the model.
+    if len(model._targets) != len(targets):
+      new_targets = [
+          None if t is None else targets.pop(0) for t in model._targets
+      ]
+      targets = new_targets
+
     metric_results = model._handle_metrics(
         outputs,
         targets=targets,
@@ -120,6 +126,16 @@ def _model_loss(model,
 
   outs = model(inputs, **kwargs)
   outs = nest.flatten(outs)
+
+  if targets:
+    targets = training_utils.cast_if_floating_dtype_and_mismatch(targets, outs)
+  # TODO(sallymatson/psv): check if we should do same mismatch fix for weights
+  if sample_weights:
+    sample_weights = [
+        training_utils.cast_if_floating_dtype(ops.convert_to_tensor(val))
+        if val is not None else None for val in sample_weights
+    ]
+
   masks = [getattr(t, '_keras_mask', None) for t in outs]
   targets = nest.flatten(targets)
 
@@ -141,6 +157,7 @@ def _model_loss(model,
             weights = mask
           else:
             # Update dimensions of weights to match with mask if possible.
+            weights = math_ops.cast(weights, outs[i].dtype)
             mask, _, weights = (
                 tf_losses_utils.squeeze_or_expand_dimensions(
                     mask, sample_weight=weights))
@@ -242,7 +259,7 @@ def _process_single_batch(model,
       else:
         scaled_total_loss = total_loss
     if training:
-      trainable_weights = model._unique_trainable_weights
+      trainable_weights = model.trainable_weights
       if trainable_weights:
         # TODO(tanzheny) b/132690565: Provide mechanism for user to override
         # model.train_on_batch.
@@ -278,18 +295,13 @@ def train_on_batch(model,
         loss values.
 
   Returns:
-      total loss and the loss associated with each output.
+      Dict with three items:
+        'total_loss': list with a single tensor for overall loss,
+        'output_losses': list of tensors for loss corresponding to each of the
+          model output. Could be a empty list when model has only one output.
+        'metrics': list of tensors for metric specified.
   """
-  if isinstance(inputs, collections.Sequence):
-    inputs = training_utils.cast_to_model_input_dtypes(inputs, model)
-    if targets:
-      targets = training_utils.cast_if_floating_dtype(targets)
-  if sample_weights:
-    sample_weights = [
-        training_utils.cast_if_floating_dtype(ops.convert_to_tensor(val))
-        if val is not None else None for val in sample_weights
-    ]
-
+  inputs = training_utils.cast_to_model_input_dtypes(inputs, model)
   outs, total_loss, output_losses, masks = (
       _process_single_batch(
           model,
@@ -303,9 +315,9 @@ def train_on_batch(model,
   metrics_results = _eager_metrics_fn(
       model, outs, targets, sample_weights=sample_weights, masks=masks)
   total_loss = nest.flatten(total_loss)
-  results = total_loss + output_losses + metrics_results
-
-  return results
+  return {'total_loss': total_loss,
+          'output_losses': output_losses,
+          'metrics': metrics_results}
 
 
 def test_on_batch(model,
@@ -324,17 +336,14 @@ def test_on_batch(model,
         loss values.
 
   Returns:
-      total loss, loss and metrics associated with each output.
+      Dict with three items:
+        'total_loss': single tensor for overall loss,
+        'output_losses': list of tensors for loss corresponding to each of the
+          model output. Could be a empty list when model has only one output.
+        'metrics': list of tensors for metric specified.
   """
-  if isinstance(inputs, collections.Sequence):
-    inputs = training_utils.cast_to_model_input_dtypes(inputs, model)
-    if targets:
-      targets = training_utils.cast_if_floating_dtype(targets)
-  if sample_weights:
-    sample_weights = [
-        training_utils.cast_if_floating_dtype(ops.convert_to_tensor(val))
-        if val is not None else None for val in sample_weights
-    ]
+  inputs = training_utils.cast_to_model_input_dtypes(inputs, model)
+
   with backend.eager_learning_phase_scope(0):
     outs, total_loss, output_losses, masks = (
         _model_loss(
@@ -349,6 +358,7 @@ def test_on_batch(model,
   metrics_results = _eager_metrics_fn(
       model, outs, targets, sample_weights=sample_weights, masks=masks)
   total_loss = nest.flatten(total_loss)
-  results = total_loss + output_losses + metrics_results
 
-  return results
+  return {'total_loss': total_loss,
+          'output_losses': output_losses,
+          'metrics': metrics_results}

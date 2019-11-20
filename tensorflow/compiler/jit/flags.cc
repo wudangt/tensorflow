@@ -105,6 +105,8 @@ void AllocateAndParseFlags() {
   build_ops_flags = new BuildXlaOpsPassFlags;
   build_ops_flags->tf_xla_enable_lazy_compilation = true;
   build_ops_flags->tf_xla_print_cluster_outputs = false;
+  build_ops_flags->tf_xla_check_cluster_input_numerics = false;
+  build_ops_flags->tf_xla_check_cluster_output_numerics = false;
   build_ops_flags->tf_xla_disable_constant_folding = false;
 
   mark_for_compilation_flags = new MarkForCompilationPassFlags;
@@ -128,6 +130,7 @@ void AllocateAndParseFlags() {
 
   ops_flags = new XlaOpsCommonFlags;
   ops_flags->tf_xla_always_defer_compilation = false;
+  ops_flags->tf_xla_noresolve_compile_time_constants = false;
 
   jitter_flags = new IntroduceFloatingPointJitterPassFlags;
   jitter_flags->jitter_amount = 1e-5;
@@ -144,6 +147,14 @@ void AllocateAndParseFlags() {
             &build_ops_flags->tf_xla_print_cluster_outputs,
             "If true then insert Print nodes to print out values produced by "
             "XLA clusters."),
+       Flag("tf_xla_check_cluster_input_numerics",
+            &build_ops_flags->tf_xla_check_cluster_input_numerics,
+            "If true then insert CheckNumerics nodes to to check all cluster "
+            "inputs."),
+       Flag("tf_xla_check_cluster_output_numerics",
+            &build_ops_flags->tf_xla_check_cluster_output_numerics,
+            "If true then insert CheckNumerics nodes to to check all cluster "
+            "outputs."),
 
        Flag("tf_xla_compile_on_demand", &device_flags->tf_xla_compile_on_demand,
             "Switch a device into 'on-demand' mode, where instead of "
@@ -151,6 +162,9 @@ void AllocateAndParseFlags() {
 
        Flag("tf_xla_always_defer_compilation",
             &ops_flags->tf_xla_always_defer_compilation, ""),
+       Flag("tf_xla_noresolve_compile_time_constants",
+            &ops_flags->tf_xla_noresolve_compile_time_constants,
+            "Do not perform constant folding in XlaCompiler::CompileGraph"),
 
        Flag("tf_introduce_floating_point_jitter_to_tensors",
             setter_for_jitter_tensor_names, "",

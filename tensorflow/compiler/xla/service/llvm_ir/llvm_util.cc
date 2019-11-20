@@ -27,6 +27,7 @@ limitations under the License.
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "tensorflow/compiler/xla/layout_util.h"
@@ -245,15 +246,6 @@ StatusOr<llvm::Value*> EncodeSelfDescribingShapeConstant(const Shape& shape,
   return b->CreateGlobalStringPtr(encoded_shape);
 }
 
-StatusOr<Shape> DecodeSelfDescribingShapeConstant(const void* shape_ptr,
-                                                  int32 size_bytes) {
-  ShapeProto shape_proto;
-  TF_RET_CHECK(shape_proto.ParseFromArray(shape_ptr, size_bytes));
-  Shape shape(shape_proto);
-  TF_RETURN_IF_ERROR(ShapeUtil::ValidateShape(shape));
-  return std::move(shape);
-}
-
 llvm::Constant* ConvertLiteralToIrConstant(const Literal& literal,
                                            llvm::Module* module) {
   const char* data = static_cast<const char*>(literal.untyped_data());
@@ -295,7 +287,7 @@ llvm::AllocaInst* EmitAllocaAtFunctionEntryWithCount(llvm::Type* type,
   llvm::AllocaInst* alloca =
       b->CreateAlloca(type, element_count, AsStringRef(name));
   if (alignment != 0) {
-    alloca->setAlignment(alignment);
+    alloca->setAlignment(llvm::MaybeAlign(alignment));
   }
   return alloca;
 }
@@ -513,6 +505,7 @@ llvm::FastMathFlags GetCpuFastMathFlags(const HloModuleConfig& module_config) {
   flags.setNoNaNs(!options.xla_cpu_fast_math_honor_nans());
   flags.setNoInfs(!options.xla_cpu_fast_math_honor_infs());
   flags.setAllowReciprocal(!options.xla_cpu_fast_math_honor_division());
+  flags.setApproxFunc(!options.xla_cpu_fast_math_honor_functions());
   return flags;
 }
 

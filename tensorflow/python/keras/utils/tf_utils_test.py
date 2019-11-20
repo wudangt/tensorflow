@@ -18,8 +18,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import numpy as np
-
 from tensorflow.python import keras
 from tensorflow.python.eager import context
 from tensorflow.python.framework import ops
@@ -89,7 +87,7 @@ class TestIsSymbolicTensor(test.TestCase):
 
       def __init__(self, input_):
         self._input = input_
-        self.value = ops.convert_to_tensor(42.)
+        self.value = ops.convert_to_tensor([[42.]])
 
       @property
       def dtype(self):
@@ -125,14 +123,14 @@ class TestIsSymbolicTensor(test.TestCase):
 
     # User-land.
     model = keras.Sequential([
-        keras.layers.InputLayer([]),
+        keras.layers.InputLayer((1,)),
         PlumbingLayer(Foo),  # Makes a `Foo` object.
     ])
     # Let's ensure Keras graph history is preserved by composing the models.
     model = keras.Model(model.inputs, model(model.outputs))
     # Now we instantiate the model and verify we have a `Foo` object, not a
     # `Tensor`.
-    y = model(ops.convert_to_tensor(7.))
+    y = model(ops.convert_to_tensor([[7.]]))
     self.assertIsInstance(y, Foo)
     # Confirm that (custom) loss sees `Foo` instance, not Tensor.
     obtained_prediction_box = [None]
@@ -140,8 +138,9 @@ class TestIsSymbolicTensor(test.TestCase):
       del y_obs
       obtained_prediction_box[0] = y_pred
       return y_pred
+    # Apparently `compile` calls the loss function enough to trigger the
+    # side-effect.
     model.compile('SGD', loss=custom_loss)
-    model.fit(np.ones((10,)), np.ones((10,)))
     self.assertIsInstance(obtained_prediction_box[0], Foo)
 
 
